@@ -220,7 +220,6 @@
     .cal-panel-title{font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;text-align:center;}
     .month-nav-row{margin-bottom:8px;text-align:center;}
     .month-nav-title{font-size:12px;font-weight:600;color:var(--text);}
-    .month-nav-title{font-size:12px;font-weight:600;color:var(--text);text-align:center;flex:1;}
     .cal-clip{overflow:hidden;position:relative;}
     .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;transition:transform 0.3s cubic-bezier(0.25,0.46,0.45,0.94);}
     .cal-cell{aspect-ratio:1;border-radius:2px;}
@@ -229,7 +228,7 @@
     .cal-cell.nodata{background:var(--amber);opacity:0.65;}
     .cal-cell.future{background:var(--surface2);opacity:0.18;}
     .cal-cell.hidden{background:transparent;}
-    .cal-cell.today{box-shadow:0 0 0 1.5px var(--accent),0 0 0 2.5px var(--bg);}
+    .cal-cell.today{box-shadow:inset 0 0 0 2px var(--accent);}
     .cal-greyed{opacity:0.35;pointer-events:none;}
 
     /* Efficiency chart */
@@ -246,7 +245,7 @@
     .yr-cell.missed{background:var(--surface2);opacity:0.35;}
     .yr-cell.nodata{background:var(--amber);opacity:0.65;}
     .yr-cell.future{background:var(--surface2);opacity:0.15;}
-    .yr-cell.today{background:var(--accent);opacity:1;box-shadow:0 0 0 1.5px #fff;}
+    .yr-cell.today{background:var(--accent);opacity:1;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,0.8);}
     .yr-cell.empty{background:transparent;opacity:0;}
   </style>
 </head>
@@ -589,11 +588,12 @@ function initSplash(){
   document.getElementById('spl-greeting').textContent=g;
   document.querySelector('.spl-sub').textContent=sub+' ✨';
 
-  const key='cbti_splash_'+new Date().toISOString().slice(0,10);
-  if(localStorage.getItem(key)){
+  const ONE_HOUR=60*60*1000;
+  const lastTs=parseInt(localStorage.getItem('cbti_splash_ts')||'0');
+  if(Date.now()-lastTs<ONE_HOUR){
     document.getElementById('splash').style.display='none';return;
   }
-  localStorage.setItem(key,'1');
+  localStorage.setItem('cbti_splash_ts',String(Date.now()));
   setTimeout(()=>{
     document.getElementById('splash').classList.add('hiding');
     setTimeout(()=>{document.getElementById('splash').style.display='none';},720);
@@ -620,7 +620,8 @@ function init(){
   initSwipe();initSplash();
 }
 
-function todayKey(){return new Date().toISOString().slice(0,10);}
+function localDateStr(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+function todayKey(){return localDateStr(new Date());}
 
 // ─── Swipe navigation with slide animation ────────
 function initSwipe(){
@@ -653,48 +654,57 @@ function showView(name){
 
   document.querySelectorAll('.pill').forEach((p,i)=>p.classList.toggle('active',i===newIdx));
 
-  // Settings = fade; tab changes = slide
+  // Settings = instant swap, no slide
   if(newIdx===-1||currentTabIdx===-1){
     curEl.classList.remove('active');newEl.classList.add('active');
-    currentTabIdx=newIdx;_onViewShown(name);return;
+    currentTabIdx=newIdx;
+    if(name==='form'&&!editingDate)autoPopulateTimes();
+    if(name==='history')renderHistory();
+    if(name==='tracker')renderTracker();
+    window.scrollTo(0,0);return;
   }
 
   const goRight=newIdx>currentTabIdx;
   const app=document.getElementById('app');
-  // Measure BEFORE making anything absolute so layout is still intact
+
+  // Measure current view BEFORE any style changes
   const topOffset=curEl.offsetTop;
   const leftOffset=curEl.offsetLeft;
   const elWidth=curEl.offsetWidth;
-  const appH=app.offsetHeight;
-  // Lock app height and clip overflow so sliding view doesn't show outside bounds
-  app.style.height=appH+'px';
-  app.style.overflow='hidden';
+  const curScrollH=curEl.scrollHeight;
 
-  // Position both views at their natural vertical position, not top:0
-  newEl.style.cssText=`display:block;position:absolute;top:${topOffset}px;left:${leftOffset}px;width:${elWidth}px;transform:translateX(${goRight?'100%':'-100%'});`;
+  // Position new view off-screen with a small extra offset so overflow:hidden fully clips it
+  const initX=goRight?'calc(100% + 20px)':'calc(-100% - 20px)';
+  newEl.style.cssText=`display:block;position:absolute;top:${topOffset}px;left:${leftOffset}px;width:${elWidth}px;transform:translateX(${initX});`;
   curEl.style.cssText=`position:absolute;top:${topOffset}px;left:${leftOffset}px;width:${elWidth}px;`;
+
+  // Pre-render content while new view is off-screen — slides in fully formed
+  if(name==='form'&&!editingDate)autoPopulateTimes();
+  if(name==='history')renderHistory();
+  if(name==='tracker')renderTracker();
+
+  // Set min-height to the TALLER of the two views so incoming content isn't clipped vertically.
+  // overflow:hidden on #app handles horizontal clipping; min-height prevents vertical clipping.
+  const newScrollH=newEl.scrollHeight;
+  app.style.minHeight=(topOffset+Math.max(curScrollH,newScrollH))+'px';
+  app.style.overflow='hidden';
 
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     const t='transform 0.34s cubic-bezier(0.25,0.46,0.45,0.94)';
     newEl.style.transition=curEl.style.transition=t;
     newEl.style.transform='translateX(0)';
-    curEl.style.transform=`translateX(${goRight?'-100%':'100%'})`;
+    curEl.style.transform=`translateX(${goRight?'calc(-100% - 20px)':'calc(100% + 20px)'})`;
   }));
 
   setTimeout(()=>{
     curEl.classList.remove('active');curEl.removeAttribute('style');
     newEl.classList.add('active');newEl.removeAttribute('style');
-    app.style.height='';app.style.overflow='';
-    currentTabIdx=newIdx;_onViewShown(name);
+    app.style.minHeight='';app.style.overflow='';
+    currentTabIdx=newIdx;window.scrollTo(0,0);
   },360);
 }
 
-function _onViewShown(name){
-  if(name==='form'&&!editingDate)autoPopulateTimes();
-  if(name==='history')renderHistory();
-  if(name==='tracker')renderTracker();
-  window.scrollTo(0,0);
-}
+function _onViewShown(name){window.scrollTo(0,0);}
 
 // ─── Streak ───────────────────────────────────────
 function getCurrentStreak(){
@@ -702,7 +712,7 @@ function getCurrentStreak(){
   const d=new Date();
   if(!entries.find(e=>e.date===today))d.setDate(d.getDate()-1);
   let s=0;
-  while(true){const ds=d.toISOString().slice(0,10);if(!entries.find(e=>e.date===ds))break;s++;d.setDate(d.getDate()-1);}
+  while(true){const ds=localDateStr(d);if(!entries.find(e=>e.date===ds))break;s++;d.setDate(d.getDate()-1);}
   return s;
 }
 function updateStreak(){
@@ -717,7 +727,7 @@ function checkExpansion(){
   const d=new Date();d.setDate(d.getDate()-1);
   let c=0;
   for(let i=0;i<60;i++){
-    const ds=d.toISOString().slice(0,10);
+    const ds=localDateStr(d);
     const e=entries.find(e=>e.date===ds&&!e.noData);
     if(!e||!e.eff)break;
     if(parseFloat(e.eff)>=0.85)c++;else break;
@@ -963,7 +973,7 @@ function formatEntryDate(ds){const[y,m,d]=ds.split('-').map(Number);const dt=new
 
 // ─── TRACKER ──────────────────────────────────────
 function getCellClass(ds){
-  const ts=new Date().toISOString().slice(0,10);
+  const ts=localDateStr(new Date());
   if(ds>ts)return'future';
   const e=entries.find(e=>e.date===ds);
   if(e&&!e.noData)return'logged';
@@ -1013,7 +1023,7 @@ function animateCalendar(dir){
 }
 
 function buildCalGrid(grid){
-  const ts=new Date().toISOString().slice(0,10);
+  const ts=localDateStr(new Date());
   const firstDow=new Date(trackerYear,trackerMonth,1).getDay();
   const dim=new Date(trackerYear,trackerMonth+1,0).getDate();
   const cells=[];
@@ -1078,7 +1088,7 @@ function renderEfficiencyChart(){
   const days=[],effs=[];
   for(let i=13;i>=0;i--){
     const d=new Date(today);d.setDate(d.getDate()-i);
-    const ds=d.toISOString().slice(0,10);
+    const ds=localDateStr(d);
     days.push({ds,d});
     const entry=entries.find(e=>e.date===ds);
     effs.push(entry&&entry.eff&&!entry.noData?parseFloat(entry.eff):null);
@@ -1171,7 +1181,7 @@ function renderYearGrid(){
   const isLeap=(year%4===0&&year%100!==0)||year%400===0;
   const diy=isLeap?366:365;
   const numCols=Math.ceil((startDow+diy)/7);
-  const ts=today.toISOString().slice(0,10);
+  const ts=localDateStr(today);
   const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   let lastLM=-1;
   const mlabels=[];
@@ -1185,7 +1195,7 @@ function renderYearGrid(){
     for(let row=0;row<7;row++){
       const di=row+col*7-startDow;
       if(di<0||di>=diy){cells.push('<div class="yr-cell empty"></div>');}
-      else{const d=new Date(year,0,di+1),ds=d.toISOString().slice(0,10);cells.push(`<div class="yr-cell ${ds===ts?'today':getCellClass(ds)}"></div>`);}
+      else{const d=new Date(year,0,di+1),ds=localDateStr(d);cells.push(`<div class="yr-cell ${ds===ts?'today':getCellClass(ds)}"></div>`);}
     }
   }
   const CW=13,GAP=2,total=numCols*(CW+GAP);
@@ -1209,23 +1219,24 @@ function renderBackupBar(){
 }
 
 function renderTracker(){
-  renderBackupBar();renderCompactCalendar();renderEfficiencyChart();renderYearGrid();
-  // After layout is computed, sync chart height to calendar and re-render
-  requestAnimationFrame(()=>{
-    const calClip=document.getElementById('cal-clip');
-    const chartCont=document.getElementById('eff-chart-container');
-    if(calClip&&chartCont&&calClip.offsetHeight>0){
-      chartCont.style.height=calClip.offsetHeight+'px';
-      renderEfficiencyChart();
-    }
-  });
+  renderBackupBar();
+  renderCompactCalendar();
+  // Force synchronous layout read to get calendar height, then size the chart to match
+  const calClip=document.getElementById('cal-clip');
+  const chartCont=document.getElementById('eff-chart-container');
+  if(calClip&&chartCont){
+    const h=calClip.offsetHeight; // triggers synchronous layout
+    if(h>0) chartCont.style.height=h+'px';
+  }
+  renderEfficiencyChart();
+  renderYearGrid();
 }
 
 // ─── CSV ──────────────────────────────────────────
 function insertMissingDays(sorted){
   if(!sorted.length)return[];const out=[];
   for(let i=0;i<sorted.length;i++){
-    if(i>0){const prev=new Date(sorted[i-1].date+'T12:00:00'),curr=new Date(sorted[i].date+'T12:00:00'),gap=Math.round((curr-prev)/86400000);for(let d=1;d<gap;d++){const md=new Date(prev);md.setDate(prev.getDate()+d);out.push({date:md.toISOString().slice(0,10),isFiller:true,prescBed:sorted[i-1].prescBed||'',prescRise:sorted[i-1].prescRise||''}); }}
+    if(i>0){const prev=new Date(sorted[i-1].date+'T12:00:00'),curr=new Date(sorted[i].date+'T12:00:00'),gap=Math.round((curr-prev)/86400000);for(let d=1;d<gap;d++){const md=new Date(prev);md.setDate(prev.getDate()+d);out.push({date:mlocalDateStr(d),isFiller:true,prescBed:sorted[i-1].prescBed||'',prescRise:sorted[i-1].prescRise||''}); }}
     out.push(sorted[i]);
   }
   return out;
